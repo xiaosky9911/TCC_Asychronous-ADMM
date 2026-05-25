@@ -279,10 +279,11 @@ This code is released for academic use. If you use this code or data in your res
 
 ```bibtex
 @misc{async_admm_cloud,
-  author       = {Mengxiao Chen},
-  title        = {Geo-Distributed Workload Scheduling of Cloud Data Centers through Consensus-Based Asynchronous Decentralized Algorithm},
+  author       = {Chen, Mengxiao and others},
+  title        = {Geo-Distributed Workload Scheduling of Cloud Data Centers 
+                  through Consensus-Based Asynchronous Decentralized Algorithm},
   year         = {2025},
-  howpublished = {\url{https://github.com/xiaosky9911/TCC_Asychronous-ADMM.git}},
+  howpublished = {\url{https://github.com/xiaosky9911/TCC_Asychronous-ADMM}},
   note         = {Source code for the paper submitted to IEEE Transactions on Cloud Computing}
 }
 ```
