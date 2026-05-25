@@ -282,7 +282,7 @@ This code is released for academic use. If you use this code or data in your res
   author       = {Mengxiao Chen et al.},
   title        = {Geo-Distributed Workload Scheduling of Cloud Data Centers through Consensus-Based Asynchronous Decentralized Algorithm},
   year         = {2025},
-  howpublished = {\url{https://github.com/xiaosky9911/TCC_Asychronous-ADMM}},
+  howpublished = {\url{https://github.com/xiaosky9911/TCC_Asychronous-ADMM.git}},
   note         = {Source code for the paper submitted to IEEE Transactions on Cloud Computing}
 }
 ```
