@@ -2,7 +2,7 @@
 
 This repository contains the source code and experimental data for the paper:
 
-> **"[Paper Title]"**  
+> **"Geo-Distributed Workload Scheduling of Cloud Data Centers through Consensus-Based Asynchronous Decentralized Algorithm"**  
 > Submitted to *IEEE Transactions on Cloud Computing*
 
 ---
