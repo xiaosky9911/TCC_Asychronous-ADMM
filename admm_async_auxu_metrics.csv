@@ -1,0 +1,2 @@
+﻿obj_total,abs_diff_to_centralized,rel_diff_to_centralized,wall_clock_total,node_avg_runtime,avg_comp_time,avg_comm_time,avg_iter,avg_msg_send_cnt,avg_bytes_send,offline_primal_consensus_residual
+1182381911.728125,441127.8868429661,0.00037294495631955376,3.62083210000128,3.5216704624963313,2.1759887249863823,1.2283691250104312,66.75,488.25,29783.25,12.288205727444508
