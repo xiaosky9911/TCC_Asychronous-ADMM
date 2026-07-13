@@ -13,18 +13,8 @@ The implementation compares synchronous and asynchronous edge-consensus ADMM for
 - Synchronous and asynchronous edge-consensus ADMM solvers.
 - Centralized Gurobi baseline for objective-value comparison.
 - Excel datasets for 4-, 8-, 16-, and 32-region systems.
-- Reproduction scripts for convergence, scalability, straggler-delay sensitivity, dependency-set sensitivity, and zero-initialization transient behavior.
-
-The current revision experiments focus on the **fixed-straggler delay setting**:
-
-```text
-SCENARIO=4
-NORMAL_SLEEP=0.005
-SLOW_SLEEP=0.04
-SLOW_RATIO=0.25
-```
-
-That is, 25% of the regions are fixed stragglers with an 8:1 update-time ratio relative to normal regions.
+- Configurable delay models, topology options, dependency-set rules, lag bounds, and convergence tolerances.
+- Reproduction scripts for convergence comparison, scalability analysis, delay sensitivity, dependency-set sensitivity, and initialization-transient analysis.
 
 ---
 
@@ -178,11 +168,40 @@ Parameters are passed through environment variables.
 | `0` | Normal-speed updates with Gaussian jitter |
 | `1` | Fixed two slow ranks, used by legacy case studies |
 | `2` | Heterogeneous base delay plus lognormal jitter |
-| `4` | Fixed-straggler setting used by the current revision experiments |
+| `3` | Normal update delay with random non-stop message loss during communication |
+| `4` | Fixed-straggler setting |
 | `5` | Fixed straggler identity plus relative Gaussian perturbation |
 | `6` | Fixed straggler identity plus uniform random update time |
 
-For the fixed-straggler revision experiments:
+### Delay Scenario Parameters
+
+| Variable | Default | Used By | Description |
+|---|---:|---|---|
+| `NORMAL_SLEEP` | `0.005` | `0`, `1`, `4`, `5`, fallback | Base update delay for normal regions, in seconds |
+| `SLOW_SLEEP` | `0.04` | `1`, `4`, `5` | Base update delay for slow regions, in seconds |
+| `SLOW_RATIO` | `0.25` | `4`, `5`, `6` | Fraction of regions treated as fixed stragglers. The current implementation selects the last `ceil(SLOW_RATIO * I)` ranks |
+| `CONGESTION_JITTER_STD` | `0.003` | `0` | Standard deviation of Gaussian jitter added to `NORMAL_SLEEP` |
+| `LOGNORMAL_MEAN` | `-4.8` | `2` | Mean parameter of the lognormal jitter distribution |
+| `LOGNORMAL_SIGMA` | `0.9` | `2` | Sigma parameter of the lognormal jitter distribution |
+| `RANDOM_DELAY_CV` | `0.3` | `5` | Relative Gaussian perturbation strength around each rank's base delay |
+| `NORMAL_SLEEP_LOW` | `0.004` | `6` | Lower bound of uniform update delay for normal regions |
+| `NORMAL_SLEEP_HIGH` | `0.006` | `6` | Upper bound of uniform update delay for normal regions |
+| `SLOW_SLEEP_LOW` | `0.032` | `6` | Lower bound of uniform update delay for fixed stragglers |
+| `SLOW_SLEEP_HIGH` | `0.048` | `6` | Upper bound of uniform update delay for fixed stragglers |
+
+Scenario behavior:
+
+| `SCENARIO` | Effective Delay / Communication Model |
+|---:|---|
+| `0` | `sleep = NORMAL_SLEEP + abs(N(0, CONGESTION_JITTER_STD))` for every rank |
+| `1` | Rank `2` sleeps `SLOW_SLEEP`; rank `5` sleeps `2 * SLOW_SLEEP`; all other ranks sleep `NORMAL_SLEEP` |
+| `2` | Each rank uses a fixed base delay and multiplier, plus lognormal jitter: `sleep = factor_rank * (base_rank + LogNormal(LOGNORMAL_MEAN, LOGNORMAL_SIGMA))` |
+| `3` | Sleep falls back to `NORMAL_SLEEP`; during message broadcast, each non-stop message has 5% probability of being skipped before the last iteration |
+| `4` | Fixed stragglers sleep `SLOW_SLEEP`; normal ranks sleep `NORMAL_SLEEP` |
+| `5` | Same fixed straggler identities as scenario 4, but with relative jitter: `sleep = base_delay + base_delay * abs(N(0, RANDOM_DELAY_CV))` |
+| `6` | Fixed stragglers sample `U(SLOW_SLEEP_LOW, SLOW_SLEEP_HIGH)`; normal ranks sample `U(NORMAL_SLEEP_LOW, NORMAL_SLEEP_HIGH)` |
+
+The fixed-straggler example configuration is:
 
 ```text
 SCENARIO=4
@@ -193,7 +212,9 @@ SLOW_RATIO=0.25
 
 ---
 
-## Reproducing Revision Experiments
+## Reproducing Experiments
+
+The scripts below provide ready-to-run experiment configurations. They can be used as-is to reproduce the included tables and figures, or edited to explore other datasets, topologies, delay models, and algorithm parameters.
 
 ### 1. Minimum Dependency Set Sensitivity
 
