@@ -44,7 +44,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Sync-ADMM",
             "Naive Async (ASP)",
             "BD-Async (SSP)",
-            "Proposed",
+            "MSMD-Async",
         ],
         help="Legend labels for the four curves.",
     )

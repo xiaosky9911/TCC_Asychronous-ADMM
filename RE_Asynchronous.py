@@ -25,7 +25,7 @@ comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
-base_dir = r'd:\yanjiusheng\ready\Cloud_TCC_Revision'
+base_dir = os.environ.get('BASE_DIR', os.path.dirname(os.path.abspath(__file__)))
 
 DATASET_OPTIONS = {
     "need_data_N4": {
@@ -77,7 +77,14 @@ if size != I:
         print(f"MPI 进程数与数据集节点数不匹配: -np {size}, 数据集要求 {I} (dataset={dataset_name})")
     comm.Abort()
 
-neighbors = [j for j in range(I) if j != rank]
+import json as _json
+
+_topo_env = os.environ.get("TOPOLOGY", "full")
+if _topo_env == "full":
+    neighbors = [j for j in range(I) if j != rank]
+else:
+    _topo_dict = _json.loads(_topo_env)
+    neighbors = sorted(_topo_dict[str(rank)])
 
 # 支持通过环境变量配置掉队者比例与睡眠时长（默认：25% 掉队者，0.04s vs 0.005s）
 SLOW_RATIO = float(os.environ.get('SLOW_RATIO', '0.25'))
@@ -87,23 +94,42 @@ NORMAL_SLEEP = float(os.environ.get('NORMAL_SLEEP', '0.005'))
 num_slow = max(1, int(np.ceil(SLOW_RATIO * I)))
 slow_ranks = list(range(I - num_slow, I))
 
-# SCENARIO=2/3 随机时延参数
+# SCENARIO=2/3/5/6 随机时延参数
 # SCENARIO=2: 通畅网络——所有节点全程 NORMAL_SLEEP + 高斯抖动
 # SCENARIO=3: 固定基础时延 + 对数正态抖动——每个 rank 有不同的固定基础延迟，
 #             叠加对数正态随机抖动，模拟节点计算能力异构 + 网络随机抖动
+# SCENARIO=5: 固定掉队者基础时延 + 相对随机扰动，便于与 SCENARIO=4 对照
+# SCENARIO=6: 固定掉队者身份 + 均匀随机更新时间
 CONGESTION_JITTER_STD = float(os.environ.get('CONGESTION_JITTER_STD', '0.003'))  # 高斯抖动标准差（s），仅 SCENARIO=2
 LOGNORMAL_MEAN = float(os.environ.get('LOGNORMAL_MEAN', '-4.8'))   # 对数正态均值参数，仅 SCENARIO=3
 LOGNORMAL_SIGMA = float(os.environ.get('LOGNORMAL_SIGMA', '0.9'))  # 对数正态标准差参数，仅 SCENARIO=3
+RANDOM_DELAY_CV = float(os.environ.get('RANDOM_DELAY_CV', '0.3'))  # 相对随机扰动强度，仅 SCENARIO=5
+NORMAL_SLEEP_LOW = float(os.environ.get('NORMAL_SLEEP_LOW', '0.004'))
+NORMAL_SLEEP_HIGH = float(os.environ.get('NORMAL_SLEEP_HIGH', '0.006'))
+SLOW_SLEEP_LOW = float(os.environ.get('SLOW_SLEEP_LOW', '0.032'))
+SLOW_SLEEP_HIGH = float(os.environ.get('SLOW_SLEEP_HIGH', '0.048'))
 
 # 论文设置：τ = ⌈T_max/T_min⌉，S = |邻居| - ⌈0.25*|邻居|⌉
 # 如果未通过环境变量指定 MAX_LAG，则按论文公式计算：tau = ceil(SLOW_SLEEP / NORMAL_SLEEP)
 if 'MAX_LAG' not in os.environ:
     tau = max(1, int(np.ceil(SLOW_SLEEP / max(NORMAL_SLEEP, 1e-6))))
 
-# 如果未通过环境变量指定 MIN_DEP_SET，则按论文公式计算：S = |邻居| - ⌈0.25*|邻居|⌉
-# 这等价于：S = |邻居| - 掉队者数量（在该节点的邻居中占25%）
+# S_MODE 支持:
+#   "formula_075" -> s_i = ceil(0.75 * |N_i|)   (per-node, based on topology)
+#   "formula_alpha" -> s_i = ceil(ALPHA_DEP * |N_i|)
+#   "fixed"       -> s_i = MIN_DEP_SET env value (global)
+#   default       -> s_i = |N_i| - ceil(0.25*|N_i|)
+_s_mode = os.environ.get("S_MODE", "default")
+_alpha_dep = float(os.environ.get("ALPHA_DEP", "0.75"))
 num_straggler_neighbors = max(1, int(np.ceil(0.25 * len(neighbors))))
-if 'MIN_DEP_SET' not in os.environ:
+if _s_mode == "formula_075":
+    S = max(1, int(np.ceil(0.75 * len(neighbors))))
+elif _s_mode == "formula_alpha":
+    S = max(1, int(np.ceil(_alpha_dep * len(neighbors))))
+elif 'MIN_DEP_SET' in os.environ:
+    S = int(os.environ.get("MIN_DEP_SET"))
+    S = min(S, len(neighbors))
+else:
     S = max(1, len(neighbors) - num_straggler_neighbors)
 
 try:
@@ -115,6 +141,26 @@ try:
 
     DK_data_cost = pd.read_excel(io, sheet_name='单价系数')
     DKC = DK_data_cost.values[0:I, 1:I + 1]
+
+    # 负荷不平衡缩放：只缩放需求(c_in,w,c_out)，容量不变
+    _demand_scale_env = os.environ.get("DEMAND_SCALE_JSON", "")
+    if _demand_scale_env:
+        import json as _json2
+        _dscale = _json2.loads(_demand_scale_env)
+        for k in range(I):
+            factor = float(_dscale.get(str(k), 1.0))
+            if factor != 1.0:
+                row_start = sum(J[:k])
+                row_end = row_start + J[k]
+                QY[row_start:row_end, 0:3] *= factor  # 只缩放 c_in, w, c_out
+        if bool(int(os.environ.get("ROUND_SCALED_DEMAND", "0"))):
+            QY[:, 0:3] = np.rint(QY[:, 0:3])
+        if rank == 0:
+            for k in range(I):
+                rows = QY[sum(J[:k]):sum(J[:k])+J[k]]
+                d = rows[:, 0].sum() + rows[:, 1].sum() + rows[:, 2].sum()
+                q = rows[:, 3].sum()
+                print(f"  Region {k}: demand={d:.0f}, Q_cap={q:.0f}, factor={float(_dscale.get(str(k),1.0)):.2f}")
 
     if rank == 0:
         print(f"数据集加载成功: {dataset_name}, 文件: {io}, 节点数: {I}")
@@ -129,10 +175,7 @@ verbose_iter_log = bool(int(os.environ.get("VERBOSE_ITER_LOG", "0")))
 # ================= 2. 异步 / ADMM 参数 =================
 max_iter = int(os.environ.get("MAX_ITER", "3500"))
 
-# minimum dependency set: 每次更新至少收到多少个活跃邻居的新 u 消息
-# 注意：N4 时每个节点只有 3 个邻居，若 S=5 会自动被 min(S, len(active_neighbors)) 截断
-if 'MIN_DEP_SET' in os.environ:
-    S = int(os.environ.get("MIN_DEP_SET"))
+# S is already computed above based on S_MODE / MIN_DEP_SET / default formula
 
 # maximum lagging level
 if 'MAX_LAG' in os.environ:
@@ -182,7 +225,9 @@ else:
     rho = min(max(rho0, rho_min), rho_max)
 
 if rank == 0:
-    print(f"异步 ADMM 参数: max_iter={max_iter}, S={S}, tau={tau}, scenario={scenario}, ")
+    _topo_label = "full" if _topo_env == "full" else "sparse"
+    print(f"异步 ADMM 参数: max_iter={max_iter}, S={S}, tau={tau}, scenario={scenario}, "
+          f"topology={_topo_label}, |N_i|={len(neighbors)}, S_mode={_s_mode}")
     if rho_strategy == "fixed":
         print(f"rho 策略: 全程固定, rho={rho_fixed_value}")
     elif rho_strategy == "adaptive":
@@ -201,6 +246,9 @@ if rank == 0:
 # Gurobi 环境
 global_env = gp.Env(empty=True)
 global_env.setParam("OutputFlag", 0)
+_grb_threads = int(os.environ.get("GRB_THREADS", "0"))
+if _grb_threads > 0:
+    global_env.setParam("Threads", _grb_threads)
 global_env.start()
 
 
@@ -344,6 +392,15 @@ def workload(iter_k=0):
             time.sleep(SLOW_SLEEP)
         else:
             time.sleep(NORMAL_SLEEP)
+    elif scenario == 5:  # 固定掉队者基础时延 + 随机相对扰动
+        base_delay = SLOW_SLEEP if rank in slow_ranks else NORMAL_SLEEP
+        jitter = base_delay * abs(np.random.normal(0.0, RANDOM_DELAY_CV))
+        time.sleep(base_delay + jitter)
+    elif scenario == 6:  # 固定掉队者身份 + 均匀随机更新时间
+        if rank in slow_ranks:
+            time.sleep(np.random.uniform(SLOW_SLEEP_LOW, SLOW_SLEEP_HIGH))
+        else:
+            time.sleep(np.random.uniform(NORMAL_SLEEP_LOW, NORMAL_SLEEP_HIGH))
     else:
         time.sleep(NORMAL_SLEEP)
 
@@ -377,13 +434,16 @@ if __name__ == '__main__':
     # 按本节点本地变量顺序存储：
     #   u_in[j][0] 对应 x[rank,j]
     #   u_in[j][1] 对应 x[j,rank]
-    u_in = {j: np.zeros(2, dtype=float) for j in neighbors}
-
-    # u_out[j]：本节点 rank 发给邻居 j 的辅助变量 u_{rank,j}
-    # 按本节点本地变量顺序存储：
-    #   u_out[j][0] 对应 x[rank,j]
-    #   u_out[j][1] 对应 x[j,rank]
-    u_out = {j: np.zeros(2, dtype=float) for j in neighbors}
+    _u_init_mode = os.environ.get("U_INIT_MODE", "zero")
+    _u_init_scale = float(os.environ.get("U_INIT_SCALE", "1.0"))
+    if _u_init_mode == "zero":
+        u_in = {j: np.zeros(2, dtype=float) for j in neighbors}
+        u_out = {j: np.zeros(2, dtype=float) for j in neighbors}
+    else:
+        _rng = np.random.RandomState(42 + rank)
+        _sigma = _u_init_scale * rho
+        u_in = {j: _rng.normal(0, _sigma, size=2).astype(float) for j in neighbors}
+        u_out = {j: _rng.normal(0, _sigma, size=2).astype(float) for j in neighbors}
 
     # 时间戳缓存：记录来自邻居的最近轮次
     last_t = {j: -1 for j in neighbors}
@@ -667,6 +727,7 @@ if __name__ == '__main__':
             break
 
     # ================= 5. 结束前再广播几次 stop，帮助邻居退出 =================
+    local_stop = 1
     if local_stop == 1:
         for _ in range(3):
             for dest in neighbors:
@@ -738,14 +799,23 @@ if __name__ == '__main__':
         #   rank i 的本地 x_local[i,j] 与 rank j 的本地 x_local[i,j] 应趋于一致；
         #   rank i 的本地 x_local[j,i] 与 rank j 的本地 x_local[j,i] 应趋于一致。
         offline_consensus_sq = 0.0
-        for i in range(size):
-            for j in range(i + 1, size):
-                xi = all_x_local[i]
-                xj = all_x_local[j]
-                offline_consensus_sq += (xi[i, j] - xj[i, j]) ** 2
-                offline_consensus_sq += (xi[j, i] - xj[j, i]) ** 2
+        if _topo_env == "full":
+            _edges = [(i, j) for i in range(size) for j in range(i + 1, size)]
+        else:
+            _td = _json.loads(_topo_env)
+            _edges = [(i, j) for i in range(size) for j in _td[str(i)] if j > i]
+        for i, j in _edges:
+            xi = all_x_local[i]
+            xj = all_x_local[j]
+            offline_consensus_sq += (xi[i, j] - xj[i, j]) ** 2
+            offline_consensus_sq += (xi[j, i] - xj[j, i]) ** 2
         offline_consensus_res = float(np.sqrt(offline_consensus_sq))
         comm_ratio = avg_comm_time / (avg_comp_time + avg_comm_time) if (avg_comp_time + avg_comm_time) > 0 else float('nan')
+
+        K_max = float(np.max(all_iters))
+        K_min = float(np.min(all_iters))
+        K_bar = float(np.mean(all_iters))
+        iter_balance = (K_max - K_min) / K_bar * 100.0 if K_bar > 0 else 0.0
 
         print("\n>>> 异步辅助变量 ADMM 核心指标（按对比要求）")
         print(f">>> 目标函数值（总）: {total_final_obj:.6f}")
@@ -759,6 +829,7 @@ if __name__ == '__main__':
         print(f">>> 平均迭代次数: {avg_iter:.3f}")
         print(f">>> 平均发送消息数: {np.mean(all_msg_send_cnt):.2f}")
         print(f">>> 平均发送字节数: {np.mean(all_bytes_send):.2f} B")
+        print(f">>> 迭代不平衡度: {iter_balance:.2f}% (K_max={K_max:.0f}, K_min={K_min:.0f}, K_bar={K_bar:.2f})")
         print(f">>> 离线 primal consensus residual: {offline_consensus_res:.6e}")
 
         if verbose_iter_log:
@@ -785,6 +856,8 @@ if __name__ == '__main__':
             du_global = np.zeros(max_len)
             eps_x_global = np.zeros(max_len)
             eps_u_global = np.zeros(max_len)
+            norm_dx_global = np.zeros(max_len)
+            norm_du_global = np.zeros(max_len)
             obj_total = np.zeros(max_len)
             wall_time_global = np.zeros(max_len)
 
@@ -800,6 +873,12 @@ if __name__ == '__main__':
                 du_global[i] = np.max(d_v)
                 eps_x_global[i] = np.max(ep_v)
                 eps_u_global[i] = np.max(ed_v)
+                norm_dx_global[i] = np.max([
+                    p_v[r] / max(ep_v[r], 1e-12) for r in range(size)
+                ])
+                norm_du_global[i] = np.max([
+                    d_v[r] / max(ed_v[r], 1e-12) for r in range(size)
+                ])
                 obj_total[i] = np.sum(o_v)
                 wall_time_global[i] = np.max(w_v)
 
@@ -810,6 +889,8 @@ if __name__ == '__main__':
                 'du_global': du_global,
                 'eps_x_global': eps_x_global,
                 'eps_u_global': eps_u_global,
+                'norm_dx_global': norm_dx_global,
+                'norm_du_global': norm_du_global,
                 'obj_global': obj_total,
             })
             if S == 0 and tau == 16000:
@@ -851,6 +932,9 @@ if __name__ == '__main__':
                 'avg_iter': avg_iter,
                 'avg_msg_send_cnt': float(np.mean(all_msg_send_cnt)),
                 'avg_bytes_send': float(np.mean(all_bytes_send)),
+                'iter_balance_pct': iter_balance,
+                'K_max': K_max,
+                'K_min': K_min,
                 'offline_primal_consensus_residual': offline_consensus_res,
             }])
             df_metrics.to_csv(metrics_path, index=False, encoding='utf-8-sig')
@@ -868,4 +952,7 @@ if __name__ == '__main__':
     print(f"[Rank {rank}] 通信耗时: {time_comm:.3f}s | 计算耗时: {time_comp:.3f}s")
 
     comm.Barrier()
-    MPI.Finalize()
+    try:
+        MPI.Finalize()
+    except Exception:
+        pass

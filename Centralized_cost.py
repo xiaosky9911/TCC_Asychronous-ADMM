@@ -19,13 +19,14 @@ python d:\yanjiusheng\ready\Cloud_TCC_Revision\Centralized_cost.py
 
 import os
 import sys
+import json
 import pandas as pd
 import gurobipy as gp
 from gurobipy import GRB
 
 
 def main():
-    base_dir = r"d:\yanjiusheng\ready\Cloud_TCC_Revision"
+    base_dir = os.environ.get('BASE_DIR', os.path.dirname(os.path.abspath(__file__)))
 
     dataset_options = {
         "need_data_N32": {
@@ -73,6 +74,19 @@ def main():
     dkc_data = pd.read_excel(io, sheet_name="单价系数")
     dkc = dkc_data.values[0:I, 1:I + 1]
 
+    # 负荷不平衡缩放（只缩放需求，不改容量）
+    _demand_scale_env = os.environ.get("DEMAND_SCALE_JSON", "")
+    if _demand_scale_env:
+        _dscale = json.loads(_demand_scale_env)
+        for k in range(I):
+            factor = float(_dscale.get(str(k), 1.0))
+            if factor != 1.0:
+                row_start = sum(J[:k])
+                row_end = row_start + J[k]
+                qy[row_start:row_end, 0:3] *= factor
+        if bool(int(os.environ.get("ROUND_SCALED_DEMAND", "0"))):
+            qy[:, 0:3] = qy[:, 0:3].round()
+
     # 每个区域的城市全局行号
     city_rows = []
     start = 0
@@ -110,6 +124,16 @@ def main():
 
         # x(i,i)=0
         model.addConstrs((x[i, i] == 0 for i in range(I)), name="x_diag_zero")
+
+        # topology constraint: if not fully connected, set non-edge flows to 0
+        topo_env = os.environ.get("TOPOLOGY", "full")
+        if topo_env != "full":
+            topo_dict = json.loads(topo_env)
+            for i in range(I):
+                nbrs = set(topo_dict[str(i)])
+                for j in range(I):
+                    if j != i and j not in nbrs:
+                        model.addConstr(x[i, j] == 0, name=f"topo_zero_{i}_{j}")
 
         # 约束
         for k in range(I):

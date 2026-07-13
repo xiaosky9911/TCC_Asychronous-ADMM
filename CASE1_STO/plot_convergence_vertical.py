@@ -12,7 +12,7 @@ csv_files = [
     base_dir / "admm_trace_async.csv",
 ]
 
-labels = ["Sync-ADMM", "Naive Async (ASP)", "BD-Async (SSP)", "Proposed"]
+labels = ["Sync-ADMM", "Naive Async (ASP)", "BD-Async (SSP)", "MSMD-Async"]
 centralized_obj = 1182823039.614968
 
 traces = []

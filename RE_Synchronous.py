@@ -18,13 +18,14 @@ import copy
 import os
 import sys
 import pickle
+import json
 
 # ================= 1. MPI 初始化与全局参数 =================
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
-base_dir = r'd:\yanjiusheng\ready\Cloud_TCC_Revision'
+base_dir = os.environ.get('BASE_DIR', os.path.dirname(os.path.abspath(__file__)))
 
 DATASET_OPTIONS = {
     "need_data_N4": {
@@ -82,6 +83,25 @@ try:
     DKQ = DK_data.values[0:I, 1:I + 1]
     DK_data_cost = pd.read_excel(io, sheet_name='单价系数')
     DKC = DK_data_cost.values[0:I, 1:I + 1]
+
+    _demand_scale_env = os.environ.get("DEMAND_SCALE_JSON", "")
+    if _demand_scale_env:
+        _dscale = json.loads(_demand_scale_env)
+        for k in range(I):
+            factor = float(_dscale.get(str(k), 1.0))
+            if factor != 1.0:
+                row_start = sum(J[:k])
+                row_end = row_start + J[k]
+                QY[row_start:row_end, 0:3] *= factor
+        if bool(int(os.environ.get("ROUND_SCALED_DEMAND", "0"))):
+            QY[:, 0:3] = np.rint(QY[:, 0:3])
+        if rank == 0:
+            for k in range(I):
+                rows = QY[sum(J[:k]):sum(J[:k])+J[k]]
+                d = rows[:, 0].sum() + rows[:, 1].sum() + rows[:, 2].sum()
+                q = rows[:, 3].sum()
+                print(f"  Region {k}: demand={d:.0f}, Q_cap={q:.0f}, factor={float(_dscale.get(str(k),1.0)):.2f}")
+
     if rank == 0:
         print(f"数据集加载成功: {dataset_name}, 文件: {io}, 节点数: {I}")
 except Exception as e:
@@ -555,13 +575,23 @@ if __name__ == '__main__':
             wall_time_global = np.zeros(trace_len)
             eps_x_global = np.zeros(trace_len)
             eps_u_global = np.zeros(trace_len)
+            norm_dx_global = np.zeros(trace_len)
+            norm_du_global = np.zeros(trace_len)
             for i in range(trace_len):
                 w_v = [all_iter_wall[r][i] if i < len(all_iter_wall[r]) else all_iter_wall[r][-1] for r in range(size)]
+                p_v = [all_pri[r][i] if i < len(all_pri[r]) else all_pri[r][-1] for r in range(size)]
+                d_v = [all_dual[r][i] if i < len(all_dual[r]) else all_dual[r][-1] for r in range(size)]
                 ep_v = [all_eps_pri[r][i] if i < len(all_eps_pri[r]) else all_eps_pri[r][-1] for r in range(size)]
                 ed_v = [all_eps_dual[r][i] if i < len(all_eps_dual[r]) else all_eps_dual[r][-1] for r in range(size)]
                 wall_time_global[i] = np.max(w_v)
                 eps_x_global[i] = np.max(ep_v)
                 eps_u_global[i] = np.max(ed_v)
+                norm_dx_global[i] = np.max([
+                    p_v[r] / max(ep_v[r], 1e-12) for r in range(size)
+                ])
+                norm_du_global[i] = np.max([
+                    d_v[r] / max(ed_v[r], 1e-12) for r in range(size)
+                ])
 
             df_trace = pd.DataFrame({
                 'iter': np.arange(1, trace_len + 1),
@@ -570,11 +600,29 @@ if __name__ == '__main__':
                 'du_global': valid_dual_global,
                 'eps_x_global': eps_x_global,
                 'eps_u_global': eps_u_global,
+                'norm_dx_global': norm_dx_global,
+                'norm_du_global': norm_du_global,
                 'obj_global': valid_obj_global,
             })
             sync_trace_path = os.path.join(base_dir, 'admm_trace_sync.csv')
             df_trace.to_csv(sync_trace_path, index=False, encoding='utf-8-sig')
             print(f">>> 同步全局收敛轨迹已保存至: {sync_trace_path}")
+
+            metrics_path = os.path.join(base_dir, 'admm_sync_metrics.csv')
+            df_metrics = pd.DataFrame([{
+                'obj_total': total_final_obj,
+                'abs_diff_to_centralized': abs_diff,
+                'rel_diff_to_centralized': rel_diff,
+                'wall_clock_total': wall_clock_total,
+                'node_avg_runtime': node_avg_runtime,
+                'avg_comp_time': avg_comp_time,
+                'avg_comm_time': avg_comm_time,
+                'avg_iter': avg_iter,
+                'avg_msg_send_cnt': float(np.mean(all_msg_send_cnt)),
+                'avg_bytes_send': float(np.mean(all_bytes_send)),
+            }])
+            df_metrics.to_csv(metrics_path, index=False, encoding='utf-8-sig')
+            print(f">>> 同步核心指标 CSV 已保存至: {metrics_path}")
         except Exception as e:
             print(f"保存失败: {e}")
 

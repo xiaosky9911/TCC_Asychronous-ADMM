@@ -2,6 +2,8 @@ import os
 import subprocess
 # 这个脚本用于快速配置环境变量并运行 MPI 任务，适用于 RE_Synchronous.py、RE_Asynchronous.py 等。
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # ================= 1. 基础配置 =================
 # 数据集选项: need_data_N4, need_data_N8, need_data_N16
 
@@ -25,9 +27,9 @@ MODE = "async"
 
 # 自动根据a模式选择对应的脚本文件
 if MODE == "sync":
-    SCRIPT_PATH = r"d:\yanjiusheng\ready\Cloud_TCC_Revision\RE_Synchronous.py"
+    SCRIPT_PATH = os.path.join(BASE_DIR, "RE_Synchronous.py")
 else:
-    SCRIPT_PATH = r"d:\yanjiusheng\ready\Cloud_TCC_Revision\RE_Asynchronous.py"
+    SCRIPT_PATH = os.path.join(BASE_DIR, "RE_Asynchronous.py")
 
 # ================= 2. 参数调整 =================
 # 通用参数 (同步与异步皆可用)
@@ -57,6 +59,7 @@ ENV_VARS = {
     "CONV_EPS_REL": "0.01",   # 相对收敛阈值 eps_rel
     "CONV_STABLE_NEED": "6",  # 连续满足收敛条件的轮数
     "CENTRALIZED_BASE": centralized_base, # 集中式目标值，用于计算误差
+    "BASE_DIR": BASE_DIR,
 }
 
 # 异步特有参数 (仅当 MODE == "async" 时注入)
